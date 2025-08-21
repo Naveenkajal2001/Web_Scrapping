@@ -1,18 +1,16 @@
-import os
 import time
-import random
 import psycopg2
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 
-# ------------------ Database Setup ------------------
+# Database Setup
 def setup_database():
     conn = psycopg2.connect(
         dbname="internship_assessment",
         user="postgres",
-        password='kajalnaveen',  # ✅ use env variable
+        password='kajalnaveen',
         host="localhost",
         port="5432"
     )
@@ -34,9 +32,9 @@ def setup_database():
     return conn, cur
 
 
-# ------------------ Browser Setup ------------------
 def setup_driver():
     options = Options()
+    # options.add_argument("--headless") # Do not working in headless mode
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -49,43 +47,17 @@ def setup_driver():
     return driver
 
 
-# ------------------ Detail Page Scraper ------------------
-def scrape_detail_page(driver, job_url):
-    """Open job in new tab, scrape description, close tab"""
-    try:
-        driver.execute_script("window.open(arguments[0], '_blank');", job_url)
-        driver.switch_to.window(driver.window_handles[-1])
-
-        # wait like a human
-        time.sleep(5)  # ✅ fixed wait (not random)
-
-        # scroll down slowly
-        for _ in range(2):
-            driver.execute_script("window.scrollBy(0, 800);")
-            time.sleep(2)
-
-        desc = driver.find_element(By.CSS_SELECTOR, "div#job-description").text.strip()
-    except Exception:
-        desc = None
-    finally:
-        driver.close()
-        driver.switch_to.window(driver.window_handles[0])
-    return desc
-
-
-# ------------------ List Page Scraper ------------------
-def scrape_list_page(driver, page_num):
+def scrape_page(driver, page_num):
     url = f"https://wellfound.com/role/data-analyst?page={page_num}"
     print(f"\n--- Scraping Page {page_num} ---")
     driver.get(url)
 
     # wait for jobs to render
-    time.sleep(8)
+    time.sleep(5)
 
-    # scroll slowly like a human
-    for _ in range(4):
-        driver.execute_script("window.scrollBy(0, 1200);")
-        time.sleep(random.uniform(2, 4))
+    # Scroll to show human behaviour
+    driver.execute_script("window.scrollBy(0, 1200);")
+    time.sleep(2)
 
     jobs_data = []
     jobs = driver.find_elements(By.CSS_SELECTOR, "div.mb-6.w-full.rounded.border.bg-white")
@@ -113,60 +85,72 @@ def scrape_list_page(driver, page_num):
             title = role.text
             link = role.get_attribute("href")
 
-            description = scrape_detail_page(driver, link)
-
             job_data = {
                 "company": company,
                 "title": title,
                 "salary": salary,
                 "location": location,
                 "url": link,
-                "description": description,
                 "source_site": "Wellfound"
             }
-            print(job_data)
+            # print(job_data)
             jobs_data.append(job_data)
-
-            # wait between jobs
-            time.sleep(random.uniform(6, 10))
 
     return jobs_data
 
+def about(joblist):
 
-# ------------------ Main ------------------
+    for index, job in enumerate(joblist):
+        url = job['url']
+
+        a = setup_driver()
+        a.get(url)
+        time.sleep(5)
+        print(url)
+
+        try:
+            desc = a.find_element(By.ID, "job-description").text.strip()
+        except Exception:
+            desc = None
+
+        joblist[index]['description'] = desc
+        a.quit()
+
+    return joblist
+
 def main():
     conn, cur = setup_database()
     driver = setup_driver()
     all_jobs = []
 
-    for page in range(1, 4):  # scrape 3 pages for test
-        jobs = scrape_list_page(driver, page)
+    for page in range(1, 3): 
+        jobs = scrape_page(driver, page)
         all_jobs.extend(jobs)
-
+    # print(all_jobs)
+    driver.quit()
+    about_page = about(all_jobs)
         # insert into DB
-        for job in jobs:
-            try:
-                cur.execute("""
-                    INSERT INTO job_listings 
-                    (job_title, company_name, location, job_url, salary_info, job_description, source_site)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (job_url) DO NOTHING
-                """, (
-                    job["title"], job["company"], job["location"], job["url"],
-                    job["salary"], job["description"], job["source_site"]
-                ))
-                conn.commit()
-            except Exception as e:
-                print("DB insert error:", e)
+    for job in about_page:
+        try:
+            cur.execute("""
+                INSERT INTO job_listings
+                (job_title, company_name, location, job_url, salary_info, job_description, source_site)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (job_url) DO NOTHING
+            """, (
+                job["title"], job["company"], job["location"], job["url"],
+                job["salary"], job["description"], job["source_site"]
+            ))
+            conn.commit()
+            print("Job is inserted: ",job)
+        except Exception as e:
+            print("DB insert error:", e)
 
-        # ✅ cooldown before next page
-        print(f"Sleeping before going to next page...")
-        time.sleep(random.uniform(15, 25))
 
     driver.quit()
     cur.close()
     conn.close()
-    print(f"\n✅ Total jobs scraped: {len(all_jobs)}")
+    
 
 
 if __name__ == "__main__":
